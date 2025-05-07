@@ -1,0 +1,37 @@
+# Output directories
+output_images/
+output_images/**/
+
+# Python virtual environment
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+Video files (optional, uncomment if you don't want to track test videos)
+input_images/*.mp4
+input_images/*.avi
+input_images/*.mov
+input_images/*.mkv
+input_images/*.webm 
+
+config.yaml

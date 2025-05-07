@@ -1,0 +1,42 @@
+# Server configuration
+server:
+  url: "http://localhost:8188"
+  timeout: 30  # seconds
+
+# Directory configuration
+directories:
+  workflows: "workflows"
+  input_images: "input_images"
+  output_images: "output_images"
+  output_subfolders:
+    images: "images"  # Subfolder for processed images
+    videos: "videos"  # Subfolder for processed videos
+    inputs: "inputs"  # Subfolder for input images
+    workflows: "workflows"  # Subfolder for workflow files
+
+# Video processing settings
+video:
+  max_frames: 100  # Maximum number of frames to process from each video
+  fps: 30  # Target FPS for output videos
+  temp_dir: "temp_frames"  # Directory for temporary frame storage
+  select_every_n: 2  # Process every Nth frame (1 = all frames, 2 = every other frame, etc.)
+
+# Image processing settings
+image:
+  max_size: 2048  # Maximum dimension for input images
+  quality: 95  # JPEG quality for output images
+
+# Workflow settings
+workflow:
+  pattern: "FLP_TEST*.json"  # Pattern to match workflow files
+  batch_size: 1  # Number of images to process in parallel
+
+# Output settings
+output:
+  create_grid: true  # Whether to create comparison grid
+  create_html: true  # Whether to create HTML table
+  grid_padding: 20  # Padding in pixels for comparison grid
+  label_height: 40  # Height of labels in comparison grid
+  label_width: 200  # Width of labels in comparison grid
+  font_size: 16  # Font size for labels
+  max_image_width: 512  # Maximum width for images in HTML table 
