@@ -506,7 +506,7 @@ def extract_frames(video_path, temp_dir, config):
     if frames_to_process <= 0:
         print(f"Warning: No frames to process in video {video_path} after skipping {skip_frames} frames")
         cap.release()
-        return []
+        return [], 0
     
     frame_paths = []
     with tqdm(total=frames_to_process, desc="Extracting frames") as pbar:
@@ -528,7 +528,7 @@ def extract_frames(video_path, temp_dir, config):
             frame_count += 1
     
     cap.release()
-    return frame_paths
+    return frame_paths, fps
 
 def process_video(workflow_file, video_path, output_dir, config):
     """Process a video through a workflow by splitting it into frames."""
@@ -540,9 +540,15 @@ def process_video(workflow_file, video_path, output_dir, config):
     os.makedirs(temp_dir, exist_ok=True)
     
     try:
-        # Extract frames
-        frames = extract_frames(video_path, temp_dir, config)
+        # Extract frames and get original FPS
+        frames, original_fps = extract_frames(video_path, temp_dir, config)
         processed_frames = []
+        
+        if not frames:
+            print(f"No frames extracted from {video_path}")
+            return None
+            
+        print(f"Source video has {original_fps} FPS")
         
         # Process each frame
         print("Processing frames through workflow...")
@@ -560,19 +566,23 @@ def process_video(workflow_file, video_path, output_dir, config):
             first_frame = cv2.imread(processed_frames[0])
             height, width = first_frame.shape[:2]
             
+            # Use the original video's FPS (or config fps as fallback)
+            output_fps = original_fps if original_fps > 0 else config['video']['fps']
+            print(f"Creating output video with {output_fps} FPS (matching source video)")
+            
             # Create video writer with H.264 codec for better browser compatibility
             try:
                 fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec (also known as avc1)
                 if not os.path.exists(os.path.dirname(output_video_path)):
                     os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
                 
-                out = cv2.VideoWriter(output_video_path, fourcc, config['video']['fps'], (width, height))
+                out = cv2.VideoWriter(output_video_path, fourcc, output_fps, (width, height))
                 if not out.isOpened():
                     # Try with a different codec if avc1 fails
                     print(f"Warning: Failed to create video with avc1 codec, trying mp4v instead")
                     out.release()
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    out = cv2.VideoWriter(output_video_path, fourcc, config['video']['fps'], (width, height))
+                    out = cv2.VideoWriter(output_video_path, fourcc, output_fps, (width, height))
                 
                 print("Creating output video...")
                 for frame_path in tqdm(processed_frames):
