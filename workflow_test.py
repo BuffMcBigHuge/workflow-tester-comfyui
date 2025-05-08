@@ -183,30 +183,6 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
         if workflow_name and input_name:
             image_map[(workflow_name, input_name)] = path
 
-    # Create a mapping for videos - with improved debugging
-    video_map = {}
-    print(f"Debug: Building video map with {len(video_paths)} videos")
-    for path in video_paths:
-        filename = os.path.basename(path)
-        workflow_name = None
-        input_name = None
-        
-        for wf_name in workflow_names:
-            wf_base = wf_name.replace('.json', '')
-            if filename.startswith(wf_base + '_'):
-                workflow_name = wf_name
-                input_name = filename[len(wf_base) + 1:].rsplit('.', 1)[0]
-                print(f"Debug: Matching video {filename} with workflow {wf_name}, input {input_name}")
-                break
-        
-        if workflow_name and input_name:
-            video_map[(workflow_name, input_name)] = path
-            print(f"Debug: Added video mapping for {workflow_name}/{input_name} -> {path}")
-        else:
-            print(f"Debug: Failed to match video {filename} with any workflow")
-    
-    print(f"Debug: Final video map has {len(video_map)} entries")
-
     html_content = """
     <!DOCTYPE html>
     <html>
@@ -273,14 +249,15 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
         </table>
     """
     
-    # Add video section if there are any videos
-    if video_map:
+    # Add video section if there are any videos in the video directory
+    video_dir = os.path.join(output_dir, config['directories']['output_subfolders']['videos'])
+    if os.path.exists(video_dir) and len(os.listdir(video_dir)) > 0:
         html_content += """
         <h2 class="section-title">Video Results</h2>
         <table>
             <tr>
-                <th>Input Video</th>
-                <th>Original</th>
+                <th>INPUT VIDEO</th>
+                <th>ORIGINAL</th>
         """
         
         # Add workflow names as column headers
@@ -291,8 +268,25 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
         
         html_content += "</tr>\n"
         
+        # Find all input video files
+        inputs_dir = os.path.join(output_dir, config['directories']['output_subfolders']['inputs'])
+        input_video_files = [f for f in glob.glob(os.path.join(inputs_dir, "*.*")) if is_video_file(f)]
+        
+        # Create a map of processed videos by workflow and input name
+        processed_videos = {}
+        for video_path in glob.glob(os.path.join(video_dir, "*.mp4")):
+            filename = os.path.basename(video_path)
+            
+            # Extract workflow name and input name from filename pattern: workflow_inputname.mp4
+            for wf_name in workflow_names:
+                wf_base = wf_name.replace('.json', '')
+                if filename.startswith(wf_base + '_'):
+                    input_name = filename[len(wf_base) + 1:].rsplit('.', 1)[0]
+                    if (wf_name, input_name) not in processed_videos:
+                        processed_videos[(wf_name, input_name)] = video_path
+        
         # Add rows for each input video
-        for input_video in video_paths:
+        for input_video in input_video_files:
             input_name = os.path.splitext(os.path.basename(input_video))[0]
             html_content += "<tr>\n"
             html_content += f'<td class="image-name">{input_name}</td>\n'
@@ -300,15 +294,21 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
             # Add the input video
             input_filename = os.path.basename(input_video)
             rel_input_path = f"{config['directories']['output_subfolders']['inputs']}/{input_filename}"
-            html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_input_path}" type="video/mp4; codecs=avc1.42E01E">Your browser does not support the video tag.</video></td>\n'
+            
+            # Handle different video extensions
+            video_ext = os.path.splitext(input_filename)[1].lower()
+            mime_type = "video/mp4" if video_ext == ".mp4" else "video/quicktime" if video_ext == ".mov" else "video/mp4"
+            
+            html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_input_path}" type="{mime_type}">Your browser does not support the video tag.</video></td>\n'
             
             # Add cells for each workflow
             for workflow_name in workflow_names:
                 key = (workflow_name, input_name)
-                if key in video_map:
-                    filename = os.path.basename(video_map[key])
+                
+                if key in processed_videos:
+                    filename = os.path.basename(processed_videos[key])
                     rel_path = f"{config['directories']['output_subfolders']['videos']}/{filename}"
-                    html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_path}" type="video/mp4; codecs=avc1.42E01E">Your browser does not support the video tag.</video></td>\n'
+                    html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_path}" type="video/mp4">Your browser does not support the video tag.</video></td>\n'
                 else:
                     html_content += '<td>No video available</td>\n'
             
