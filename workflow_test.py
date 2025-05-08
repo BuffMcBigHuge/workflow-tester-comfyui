@@ -183,8 +183,9 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
         if workflow_name and input_name:
             image_map[(workflow_name, input_name)] = path
 
-    # Create a mapping for videos
+    # Create a mapping for videos - with improved debugging
     video_map = {}
+    print(f"Debug: Building video map with {len(video_paths)} videos")
     for path in video_paths:
         filename = os.path.basename(path)
         workflow_name = None
@@ -195,10 +196,16 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
             if filename.startswith(wf_base + '_'):
                 workflow_name = wf_name
                 input_name = filename[len(wf_base) + 1:].rsplit('.', 1)[0]
+                print(f"Debug: Matching video {filename} with workflow {wf_name}, input {input_name}")
                 break
         
         if workflow_name and input_name:
             video_map[(workflow_name, input_name)] = path
+            print(f"Debug: Added video mapping for {workflow_name}/{input_name} -> {path}")
+        else:
+            print(f"Debug: Failed to match video {filename} with any workflow")
+    
+    print(f"Debug: Final video map has {len(video_map)} entries")
 
     html_content = """
     <!DOCTYPE html>
@@ -293,7 +300,7 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
             # Add the input video
             input_filename = os.path.basename(input_video)
             rel_input_path = f"{config['directories']['output_subfolders']['inputs']}/{input_filename}"
-            html_content += f'<td><video controls><source src="{rel_input_path}" type="video/mp4">Your browser does not support the video tag.</video></td>\n'
+            html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_input_path}" type="video/mp4; codecs=avc1.42E01E">Your browser does not support the video tag.</video></td>\n'
             
             # Add cells for each workflow
             for workflow_name in workflow_names:
@@ -301,7 +308,7 @@ def create_html_table(output_dir, image_paths, workflow_names, input_images, vid
                 if key in video_map:
                     filename = os.path.basename(video_map[key])
                     rel_path = f"{config['directories']['output_subfolders']['videos']}/{filename}"
-                    html_content += f'<td><video controls><source src="{rel_path}" type="video/mp4">Your browser does not support the video tag.</video></td>\n'
+                    html_content += f'<td><video controls preload="metadata" width="100%"><source src="{rel_path}" type="video/mp4; codecs=avc1.42E01E">Your browser does not support the video tag.</video></td>\n'
                 else:
                     html_content += '<td>No video available</td>\n'
             
@@ -480,44 +487,48 @@ def process_workflow(workflow_file, image_path, output_dir, config):
     return output_path
 
 def extract_frames(video_path, temp_dir, config):
-    """Extract frames from a video file and save them as PNG images."""
-    video = cv2.VideoCapture(video_path)
-    fps = video.get(cv2.CAP_PROP_FPS)
-    frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    max_frames = config['video']['max_frames']
+    """Extract frames from video file."""
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    
+    # Skip the specified number of frames at the start
+    skip_frames = config['video'].get('skip_first_frames', 0)
+    for _ in range(skip_frames):
+        cap.read()
+    total_frames = max(0, total_frames - skip_frames)
+    
+    # Calculate how many frames to process
     select_every_n = config['video']['select_every_n']
+    max_frames = config['video']['max_frames']
+    frames_to_process = min(total_frames // select_every_n, max_frames)
     
-    # Calculate total frames to process
-    frames_to_process = frame_count // select_every_n
-    if frames_to_process > max_frames:
-        print(f"Limiting video to {max_frames} frames (from {frames_to_process} after selecting every {select_every_n}th frame)")
-        frames_to_process = max_frames
+    if frames_to_process <= 0:
+        print(f"Warning: No frames to process in video {video_path} after skipping {skip_frames} frames")
+        cap.release()
+        return []
     
-    frames = []
-    frame_index = 0
-    
-    print(f"Extracting {frames_to_process} frames from video (selecting every {select_every_n}th frame)...")
-    with tqdm(total=frames_to_process) as pbar:
-        while len(frames) < frames_to_process:
-            ret, frame = video.read()
+    frame_paths = []
+    with tqdm(total=frames_to_process, desc="Extracting frames") as pbar:
+        frame_count = 0
+        processed_count = 0
+        
+        while frame_count < total_frames and processed_count < frames_to_process:
+            ret, frame = cap.read()
             if not ret:
                 break
-            
-            # Only process every Nth frame
-            if frame_index % select_every_n == 0:
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_path = os.path.join(temp_dir, f"frame_{len(frames):06d}.png")
                 
-                # Save frame as PNG using PIL for consistency with image workflow
-                Image.fromarray(frame_rgb).save(frame_path, quality=config['image']['quality'])
-                frames.append(frame_path)
+            if frame_count % select_every_n == 0:
+                frame_path = os.path.join(temp_dir, f"frame_{processed_count:04d}.png")
+                cv2.imwrite(frame_path, frame)
+                frame_paths.append(frame_path)
+                processed_count += 1
                 pbar.update(1)
             
-            frame_index += 1
+            frame_count += 1
     
-    video.release()
-    return frames, fps
+    cap.release()
+    return frame_paths
 
 def process_video(workflow_file, video_path, output_dir, config):
     """Process a video through a workflow by splitting it into frames."""
@@ -530,7 +541,7 @@ def process_video(workflow_file, video_path, output_dir, config):
     
     try:
         # Extract frames
-        frames, fps = extract_frames(video_path, temp_dir, config)
+        frames = extract_frames(video_path, temp_dir, config)
         processed_frames = []
         
         # Process each frame
@@ -549,18 +560,37 @@ def process_video(workflow_file, video_path, output_dir, config):
             first_frame = cv2.imread(processed_frames[0])
             height, width = first_frame.shape[:2]
             
-            # Create video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_video_path, fourcc, config['video']['fps'], (width, height))
-            
-            print("Creating output video...")
-            for frame_path in tqdm(processed_frames):
-                frame = cv2.imread(frame_path)
-                out.write(frame)
-            
-            out.release()
-            print(f"Video saved as {output_filename}")
-            return output_video_path
+            # Create video writer with H.264 codec for better browser compatibility
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec (also known as avc1)
+                if not os.path.exists(os.path.dirname(output_video_path)):
+                    os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
+                
+                out = cv2.VideoWriter(output_video_path, fourcc, config['video']['fps'], (width, height))
+                if not out.isOpened():
+                    # Try with a different codec if avc1 fails
+                    print(f"Warning: Failed to create video with avc1 codec, trying mp4v instead")
+                    out.release()
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(output_video_path, fourcc, config['video']['fps'], (width, height))
+                
+                print("Creating output video...")
+                for frame_path in tqdm(processed_frames):
+                    frame = cv2.imread(frame_path)
+                    out.write(frame)
+                
+                out.release()
+                
+                # Verify the video was created successfully
+                if os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0:
+                    print(f"Video saved as {output_filename} ({os.path.getsize(output_video_path)} bytes)")
+                    return output_video_path
+                else:
+                    print(f"Error: Failed to create video file {output_filename}")
+                    return None
+            except Exception as e:
+                print(f"Error creating video: {str(e)}")
+                return None
     
     finally:
         # Clean up temporary directory
@@ -580,69 +610,121 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Process workflows with images and videos')
     parser.add_argument('--config', required=True, help='Path to configuration file')
+    parser.add_argument('--html-only', action='store_true', help='Only generate HTML report from existing output directory')
+    parser.add_argument('--output-dir', help='Specify output directory for HTML-only mode')
     args = parser.parse_args()
     
     # Load configuration
     config = load_config(args.config)
     
-    # Create output directory
-    output_dir, timestamp = create_output_directory(config)
-    print(f"Created output directory: {output_dir}")
-    
-    # Get all workflow files
-    workflow_files = glob.glob(os.path.join(config['directories']['workflows'], config['workflow']['pattern']))
-    workflow_files.sort()
-    
-    # Copy workflow files to the workflows subdirectory
-    workflow_copies = copy_workflow_files(workflow_files, output_dir, config)
-    
-    # Get all input files (both images and videos)
-    input_files = glob.glob(os.path.join(config['directories']['input_images'], "*.*"))
-    input_files.sort()
-    
-    # Separate images and videos
-    input_images = [f for f in input_files if not is_video_file(f)]
-    input_videos = [f for f in input_files if is_video_file(f)]
-    
-    # Copy input images and videos to the inputs subdirectory
-    input_copies = copy_input_images(input_images + input_videos, output_dir, config)
-    
-    # Process each workflow with each image/video
-    all_output_paths = []
-    all_video_paths = []
-    workflow_names = []
-    
-    for workflow_file in workflow_files:
-        workflow_name = os.path.basename(workflow_file)
-        workflow_names.append(workflow_name)
+    if args.html_only:
+        # HTML-only mode
+        if not args.output_dir:
+            print("Error: --output-dir is required with --html-only")
+            sys.exit(1)
+            
+        output_dir = args.output_dir
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Process images
-        for image_path in input_images:
-            output_path = process_workflow(workflow_name, image_path, output_dir, config)
-            if output_path:
-                all_output_paths.append(output_path)
+        if not os.path.exists(output_dir):
+            print(f"Error: Output directory '{output_dir}' does not exist")
+            sys.exit(1)
+            
+        print(f"Generating HTML report for existing output directory: {output_dir}")
         
-        # Process videos
-        for video_path in input_videos:
-            output_path = process_video(workflow_name, video_path, output_dir, config)
-            if output_path:
-                all_video_paths.append(output_path)
-                print(f"Video processing complete: {output_path}")
-    
-    # Create comparison grid and HTML table
-    if (all_output_paths and input_images) or (all_video_paths and input_videos):
-        if config['output']['create_grid'] and all_output_paths:
-            grid_path = create_comparison_grid(output_dir, all_output_paths, workflow_names, input_copies[:len(input_images)], config, timestamp)
-            print(f"\nComparison grid saved as: {grid_path}")
+        # Check for required subdirectories
+        images_dir = os.path.join(output_dir, config['directories']['output_subfolders']['images'])
+        videos_dir = os.path.join(output_dir, config['directories']['output_subfolders']['videos'])
+        inputs_dir = os.path.join(output_dir, config['directories']['output_subfolders']['inputs'])
+        workflows_dir = os.path.join(output_dir, config['directories']['output_subfolders']['workflows'])
         
-        if config['output']['create_html']:
+        if not all(os.path.exists(d) for d in [images_dir, videos_dir, inputs_dir, workflows_dir]):
+            print("Warning: Some required subdirectories are missing. The HTML report may be incomplete.")
+        
+        # Collect all existing files
+        workflow_copies = glob.glob(os.path.join(workflows_dir, "*.json"))
+        input_images = [f for f in glob.glob(os.path.join(inputs_dir, "*.*")) if not is_video_file(f)]
+        input_videos = [f for f in glob.glob(os.path.join(inputs_dir, "*.*")) if is_video_file(f)]
+        all_output_paths = glob.glob(os.path.join(images_dir, "*.png"))
+        all_video_paths = glob.glob(os.path.join(videos_dir, "*.mp4"))
+        
+        # Extract workflow names
+        workflow_names = [os.path.basename(wf) for wf in workflow_copies]
+        
+        # Create HTML table
+        if (all_output_paths and input_images) or (all_video_paths and input_videos):
             html_path = create_html_table(output_dir, all_output_paths, workflow_names, 
-                                        input_copies[:len(input_images)], all_video_paths, workflow_copies, config, timestamp)
+                                        input_images, all_video_paths, workflow_copies, config, timestamp)
             print(f"HTML table saved as: {html_path}")
-    
-    # Create zip archive of results
-    zip_path = create_zip_archive(output_dir, timestamp)
-    print(f"\nResults archived as: {zip_path}")
+            
+            # Copy CSS file to output directory if it doesn't exist
+            css_source = os.path.join(os.path.dirname(__file__), 'report.css')
+            css_dest = os.path.join(output_dir, 'report.css')
+            if os.path.exists(css_source) and not os.path.exists(css_dest):
+                shutil.copy2(css_source, output_dir)
+        else:
+            print("No output files found to generate HTML report")
+            
+    else:
+        # Normal processing mode
+        # Create output directory
+        output_dir, timestamp = create_output_directory(config)
+        print(f"Created output directory: {output_dir}")
+        
+        # Get all workflow files
+        workflow_files = glob.glob(os.path.join(config['directories']['workflows'], config['workflow']['pattern']))
+        workflow_files.sort()
+        
+        # Copy workflow files to the workflows subdirectory
+        workflow_copies = copy_workflow_files(workflow_files, output_dir, config)
+        
+        # Get all input files (both images and videos)
+        input_files = glob.glob(os.path.join(config['directories']['input_images'], "*.*"))
+        input_files.sort()
+        
+        # Separate images and videos
+        input_images = [f for f in input_files if not is_video_file(f)]
+        input_videos = [f for f in input_files if is_video_file(f)]
+        
+        # Copy input images and videos to the inputs subdirectory
+        input_copies = copy_input_images(input_images + input_videos, output_dir, config)
+        
+        # Process each workflow with each image/video
+        all_output_paths = []
+        all_video_paths = []
+        workflow_names = []
+        
+        for workflow_file in workflow_files:
+            workflow_name = os.path.basename(workflow_file)
+            workflow_names.append(workflow_name)
+            
+            # Process images
+            for image_path in input_images:
+                output_path = process_workflow(workflow_name, image_path, output_dir, config)
+                if output_path:
+                    all_output_paths.append(output_path)
+            
+            # Process videos
+            for video_path in input_videos:
+                output_path = process_video(workflow_name, video_path, output_dir, config)
+                if output_path:
+                    all_video_paths.append(output_path)
+                    print(f"Video processing complete: {output_path}")
+        
+        # Create comparison grid and HTML table
+        if (all_output_paths and input_images) or (all_video_paths and input_videos):
+            if config['output']['create_grid'] and all_output_paths:
+                grid_path = create_comparison_grid(output_dir, all_output_paths, workflow_names, input_copies[:len(input_images)], config, timestamp)
+                print(f"\nComparison grid saved as: {grid_path}")
+            
+            if config['output']['create_html']:
+                html_path = create_html_table(output_dir, all_output_paths, workflow_names, 
+                                            input_copies[:len(input_images)], all_video_paths, workflow_copies, config, timestamp)
+                print(f"HTML table saved as: {html_path}")
+        
+        # Create zip archive of results
+        zip_path = create_zip_archive(output_dir, timestamp)
+        print(f"\nResults archived as: {zip_path}")
 
 if __name__ == "__main__":
     main() 
