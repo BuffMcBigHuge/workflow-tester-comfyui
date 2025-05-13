@@ -1,6 +1,5 @@
 import json
 import urllib.request
-import websocket
 import time
 import io
 import os
